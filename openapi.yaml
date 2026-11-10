@@ -1,0 +1,105 @@
+openapi: 3.0.3
+info:
+  title: Soroban Verify Registry
+  version: 0.2.0
+  license:
+    name: Apache-2.0
+  description: >
+    Maps contract ID to repo, commit, build hash and status (testnet only). The registry always
+    checks the on-chain hash itself. New entries are self-reported; with server-side
+    re-verification enabled, the registry re-runs the build and upgrades the entry to reverified.
+servers:
+  - url: https://registry.example.invalid
+paths:
+  /verifications:
+    post:
+      operationId: submitVerification
+      summary: Submit a verification result
+      security:
+        - ApiKey: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Submission" }
+      responses:
+        "201":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Record"
+                  - type: object
+                    properties:
+                      reverification: { type: string, enum: [queued, disabled] }
+        "400": { description: "Malformed input, or status inconsistent with the two hashes" }
+        "401": { description: Missing or invalid x-api-key (when API keys are configured) }
+        "404": { description: Contract not found on testnet }
+        "422": { description: Submitted onchain_hash differs from the real on-chain hash }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /contracts/{id}:
+    get:
+      operationId: getContract
+      security: []
+      summary: Latest record for a contract
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: "^C[A-Z2-7]{55}$" } }
+      responses:
+        "200":
+          description: Latest record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "404": { description: Unknown contract }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /badge/{id}.svg:
+    get:
+      operationId: getBadge
+      security: []
+      summary: SVG badge (verified (self-reported), verified, mismatch, or unknown)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: SVG image
+          content:
+            image/svg+xml:
+              schema: { type: string }
+        "429": { $ref: "#/components/responses/RateLimited" }
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+  responses:
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds until the window resets }
+  schemas:
+    Submission:
+      type: object
+      required: [contract_id, repo, commit, onchain_hash, built_hash, status]
+      properties:
+        contract_id: { type: string, pattern: "^C[A-Z2-7]{55}$" }
+        repo: { type: string, maxLength: 500 }
+        commit: { type: string, pattern: "^[0-9a-f]{7,40}$" }
+        onchain_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        built_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        status: { type: string, enum: [verified, mismatch] }
+        source: { type: string, maxLength: 64 }
+    Record:
+      allOf:
+        - $ref: "#/components/schemas/Submission"
+        - type: object
+          properties:
+            network: { type: string, enum: [testnet] }
+            trust: { type: string, enum: [self_reported, reverified] }
+            note:
+              type: string
+              nullable: true
+              description: Set when re-verification changed the submitted claim
+            created_at: { type: string, format: date-time }
